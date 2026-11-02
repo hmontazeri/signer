@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Security
 
 struct HTTPRequest {
     var method: String
@@ -25,13 +26,23 @@ struct HTTPResponse {
 
 /// Minimaler HTTP-Server im lokalen Netz, damit das iPhone per Safari unterschreiben kann.
 final class PhoneServer {
-    /// Bleibt über App-Neustarts gleich, damit ein offener Safari-Tab auf dem iPhone weiter funktioniert.
+    /// 128 Bit Zufall, nur für diesen App-Start gültig (wird nicht gespeichert).
     let token: String = {
-        if let t = UserDefaults.standard.string(forKey: "phoneToken") { return t }
-        let t = (0..<4).map { _ in String(format: "%04x", UInt16.random(in: 0...UInt16.max)) }.joined()
-        UserDefaults.standard.set(t, forKey: "phoneToken")
-        return t
+        var bytes = [UInt8](repeating: 0, count: 16)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            for i in bytes.indices { bytes[i] = UInt8.random(in: 0...255) }
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
     }()
+
+    func isValid(token candidate: String?) -> Bool {
+        guard let c = candidate?.utf8 else { return false }
+        let a = Array(token.utf8), b = Array(c)
+        var diff = a.count ^ b.count
+        for i in 0..<a.count { diff |= Int(a[i] ^ (i < b.count ? b[i] : 0)) }
+        return diff == 0
+    }
+
     private(set) var port: UInt16 = 0
     var handler: (@Sendable (HTTPRequest) async -> HTTPResponse)?
     var onReady: (() -> Void)?
@@ -110,7 +121,8 @@ final class PhoneServer {
         for l in lines.dropFirst() {
             let kv = l.split(separator: ":", maxSplits: 1)
             if kv.count == 2, kv[0].lowercased() == "content-length" {
-                length = Int(kv[1].trimmingCharacters(in: .whitespaces)) ?? 0
+                guard let n = Int(kv[1].trimmingCharacters(in: .whitespaces)), n >= 0, n <= 8_000_000 else { return .invalid }
+                length = n
             }
         }
         let body = data[end.upperBound...]

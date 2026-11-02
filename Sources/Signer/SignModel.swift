@@ -27,7 +27,7 @@ final class SignModel: ObservableObject {
     @Published var phoneLastSeen: Date?
     @Published var serverReady = false
     @Published var message: String?
-    @Published var showPhone = false
+    @Published var showPhone = false { didSet { if showPhone { ensureServer() } } }
 
     weak var pdfView: SigPDFView?
     let server = PhoneServer()
@@ -44,6 +44,13 @@ final class SignModel: ObservableObject {
             return await self.handle(req)
         }
         server.onReady = { [weak self] in self?.serverReady = true }
+    }
+
+    private var serverStarted = false
+    /// Der Server läuft erst, wenn iPhone-Modus oder QR-Fenster gebraucht werden.
+    func ensureServer() {
+        guard !serverStarted else { return }
+        serverStarted = true
         server.start()
     }
 
@@ -132,7 +139,7 @@ final class SignModel: ObservableObject {
     }
 
     func modeChanged() {
-        if mode != .phone { clearTarget() }
+        if mode == .phone { ensureServer() } else { clearTarget() }
         if mode == .phone, target == nil, let c = lastBoxCenter, !signedPages.contains(currentPage),
            let page = document?.page(at: currentPage) {
             placeTarget(on: page, center: c)
@@ -316,7 +323,7 @@ final class SignModel: ObservableObject {
     // MARK: HTTP (iPhone)
 
     private func handle(_ req: HTTPRequest) async -> HTTPResponse {
-        guard req.query["t"] == server.token else { return .text("Forbidden", status: 403) }
+        guard server.isValid(token: req.query["t"]) else { return .text("Forbidden", status: 403) }
         switch (req.method, req.path) {
         case ("GET", "/"):
             return .text(PhonePage.html, type: "text/html; charset=utf-8")
